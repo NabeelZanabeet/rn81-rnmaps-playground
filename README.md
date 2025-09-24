@@ -26,4 +26,4 @@ npm run android
 
 ### On my actual app, using Marker custom image uri, does render the image but then getting a wierd red default markers all over the place 
 
-[▶️ Watch the recording](./recording.mov)
+[▶️ Watch the recording](./recording.gif)
