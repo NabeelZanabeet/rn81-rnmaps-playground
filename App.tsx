@@ -6,7 +6,7 @@
  */
 
 import MapView, { PROVIDER_GOOGLE, Polygon } from 'react-native-maps';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
+import { StatusBar, StyleSheet, useColorScheme, View, TouchableOpacity, Text } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import gasStation from './assets/images/gas.png';
 import car from './assets/images/car.png';
@@ -35,11 +35,12 @@ function AppContent() {
     selected: boolean;
     baseIconIndex: number; // to vary non-selected icons deterministically
     baseRenderMode: 'native' | 'child'; // mimic prod: some use native image prop
+    rev: number; // force remount when incremented
   };
 
   // Generate a dynamic list of random markers around Berlin (>= 1000)
-  const [markers, setMarkers] = useState<MarkerItem[]>(() => {
-    const count = 500;
+  const generateMarkers = () => {
+    const count = 1000;
     const maxLatOffset = 0.12; // ~13km
     const maxLngOffset = 0.2; // ~13km at Berlin latitude
     const data: MarkerItem[] = [];
@@ -53,10 +54,12 @@ function AppContent() {
         selected: false,
         baseIconIndex: i % 3, // 0..2 for variety
         baseRenderMode: i % 2 === 0 ? 'native' : 'child',
+        rev: 0,
       });
     }
     return data;
-  });
+  };
+  const [markers, setMarkers] = useState<MarkerItem[]>(() => generateMarkers());
 
   const selectedMarker = markers.find(m => m.selected) ?? null;
 
@@ -80,10 +83,16 @@ function AppContent() {
     ? circleCoordsFor(selectedMarker.latitude, selectedMarker.longitude)
     : null;
 
+  // Inline renderers (no memoize-one)
+
+  const [churn, setChurn] = useState(true);
+  const [delayChild, setDelayChild] = useState(false);
   // Stress toggling to reproduce: randomly select/deselect markers
   useEffect(() => {
+    if (!churn) return;
     const interval = setInterval(() => {
       setMarkers(prev => {
+        if (prev.length === 0) return prev;
         const next = [...prev];
         const idx = Math.floor(Math.random() * next.length);
         const current = next[idx];
@@ -96,7 +105,29 @@ function AppContent() {
       });
     }, 800);
     return () => clearInterval(interval);
-  }, []);
+  }, [churn]);
+
+  const burstUpdate = () => {
+    setMarkers(prev => {
+      if (prev.length === 0) return prev;
+      // Flip mode and rev for ~30% of markers to force heavy redraws
+      const threshold = Math.floor(prev.length * 0.3);
+      const indices = new Set<number>();
+      while (indices.size < threshold) {
+        indices.add(Math.floor(Math.random() * prev.length));
+      }
+      return prev.map((m, i) =>
+        indices.has(i)
+          ? {
+              ...m,
+              baseRenderMode: m.baseRenderMode === 'native' ? 'child' : 'native',
+              baseIconIndex: (m.baseIconIndex + 1) % 3,
+              rev: m.rev + 1,
+            }
+          : m,
+      );
+    });
+  };
 
   return (
     <View style={styles.root}>
@@ -120,35 +151,38 @@ function AppContent() {
               zIndex={0}
             />
           )}
-          {/* Render non-selected markers, mixing native image vs child image */}
-          {markers.filter(m => !m.selected).map(m => {
-            const baseIcon = m.baseIconIndex === 0 ? gasStation : car;
-            const useNative = m.baseRenderMode === 'native';
-            return (
-              <IconMarker
-                key={m.id}
-                id={String(m.id)}
-                coordinate={{ latitude: m.latitude, longitude: m.longitude }}
-                zIndex={0}
-                useNativeImage={useNative}
-                nativeImage={useNative ? baseIcon : undefined}
-                childImage={!useNative ? baseIcon : undefined}
-                size={{ width: 36, height: 36 }}
-                onPress={() => {
-                  setMarkers(prev => prev.map(p =>
-                    p.id === m.id
-                      ? { ...p, selected: true }
-                      : { ...p, selected: false }
-                  ));
-                }}
-              />
-            );
-          })}
+          {/* Render non-selected markers inline */}
+          {markers
+            .filter(m => !m.selected)
+            .map(m => {
+              const baseIcon = m.baseIconIndex === 0 ? gasStation : car;
+              const useNative = m.baseRenderMode === 'native';
+              const suppressChild = !useNative && delayChild && Math.random() < 0.15;
+              return (
+                <IconMarker
+                  key={`${m.id}-${m.rev}`}
+                  id={String(m.id)}
+                  coordinate={{ latitude: m.latitude, longitude: m.longitude }}
+                  zIndex={0}
+                  useNativeImage={useNative}
+                  nativeImageName={useNative ? 'map_pin_gasstation' : undefined}
+                  nativeImage={undefined}
+                  childImage={!useNative ? baseIcon : undefined}
+                  suppressChild={suppressChild}
+                  size={{ width: 36, height: 36 }}
+                  onPress={() => {
+                    setMarkers(prev =>
+                      prev.map(p => (p.id === m.id ? { ...p, selected: true } : { ...p, selected: false })),
+                    );
+                  }}
+                />
+              );
+            })}
 
-          {/* Render selected marker separately with a different icon and child-image mode */}
-          {selectedMarker && (
+          {/* Render selected marker inline */}
+          {selectedMarker ? (
             <IconMarker
-              key={`selected-${selectedMarker.id}`}
+              key={`selected-${selectedMarker.id}-${selectedMarker.rev}`}
               id={`selected-${selectedMarker.id}`}
               coordinate={{ latitude: selectedMarker.latitude, longitude: selectedMarker.longitude }}
               zIndex={2}
@@ -156,16 +190,25 @@ function AppContent() {
               childImage={car2}
               size={{ width: 60, height: 60 }}
               onPress={() => {
-                // Deselect on press to flip back
-                setMarkers(prev => prev.map(p =>
-                  p.id === selectedMarker.id
-                    ? { ...p, selected: false }
-                    : p
-                ));
+                setMarkers(prev => prev.map(p => (p.id === selectedMarker.id ? { ...p, selected: false } : p)));
               }}
             />
-          )}
+          ) : null}
         </MapView>
+        {/* Top-right controls (must be sibling, not child, of MapView on Android) */}
+        <View pointerEvents="box-none" style={styles.controls}>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              onPress={() => setDelayChild(v => !v)}
+              style={[styles.button, { marginRight: 8 }]}
+            >
+              <Text style={styles.buttonText}>{delayChild ? 'Delay Off' : 'Delay On'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={burstUpdate} style={styles.button}>
+              <Text style={styles.buttonText}>Burst</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -182,6 +225,25 @@ const styles = StyleSheet.create({
   },
   map: {
     ...StyleSheet.absoluteFillObject,
+  },
+  controls: {
+    position: 'absolute',
+    top: 100,
+    right: 16,
+    zIndex: 9999,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+  },
+  button: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  buttonText: {
+    color: 'white',
+    fontWeight: '600',
   },
 });
 

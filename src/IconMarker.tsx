@@ -8,18 +8,20 @@ type Props = {
   zIndex?: number;
   useNativeImage?: boolean;
   nativeImage?: any;
+  nativeImageName?: string; // Android drawable/mipmap resource name
   childImage?: any;
   size: { width: number; height: number };
   onPress?: any;
+  suppressChild?: boolean; // when true, render Marker without child (simulates delayed content)
 };
 
 export default class IconMarker extends React.PureComponent<Props> {
   markerRef: any | null = null;
 
   render() {
-    const { id, coordinate, zIndex = 0, useNativeImage, nativeImage, childImage, size, onPress } = this.props;
+    const { id, coordinate, zIndex = 0, useNativeImage, nativeImage, nativeImageName, childImage, size, onPress, suppressChild } = this.props;
 
-    if (useNativeImage && nativeImage) {
+    if (useNativeImage && (nativeImage || nativeImageName)) {
       return (
         <Marker
           key={id}
@@ -33,7 +35,7 @@ export default class IconMarker extends React.PureComponent<Props> {
           coordinate={coordinate}
           zIndex={zIndex}
           // Static native image resource
-          image={nativeImage}
+          image={(nativeImage || (nativeImageName as any))}
         />
       );
     }
@@ -52,7 +54,7 @@ export default class IconMarker extends React.PureComponent<Props> {
         coordinate={coordinate}
         zIndex={zIndex}
       >
-        {childImage ? (
+        {childImage && !suppressChild ? (
           <Image style={{ width: size.width, height: size.height }} source={childImage} resizeMode="contain" />
         ) : null}
       </Marker>
