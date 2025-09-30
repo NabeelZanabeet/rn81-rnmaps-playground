@@ -24,7 +24,9 @@ npm run android
 
 ```
 
-### On my actual app, using Marker custom image uri, does render the image but then getting a wierd red default markers all over the place 
+### Reproduction of red markers issue appearing randomly
+relates to
+https://github.com/react-native-maps/react-native-maps/issues/5736
 
 ![Recording](https://raw.githubusercontent.com/NabeelZanabeet/rn81-rnmaps-playground/refs/heads/main/Recording.gif)
 
