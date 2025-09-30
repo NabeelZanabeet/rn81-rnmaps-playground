@@ -5,17 +5,14 @@
  * @format
  */
 
-import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
-import {
-  StatusBar,
-  StyleSheet,
-  useColorScheme,
-  View,
-  Image,
-} from 'react-native';
+import MapView, { PROVIDER_GOOGLE, Polygon } from 'react-native-maps';
+import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import gasStation from './assets/images/gas.png';
-import { useMemo, useState } from 'react';
+import car from './assets/images/car.png';
+import car2 from './assets/images/car2.png';
+import IconMarker from './src/IconMarker';
+import { useEffect, useState } from 'react';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
@@ -31,48 +28,75 @@ function App() {
 function AppContent() {
   // Berlin center
   const BERLIN = { latitude: 52.520008, longitude: 13.404954 };
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  type MarkerItem = {
+    id: number;
+    latitude: number;
+    longitude: number;
+    selected: boolean;
+    baseIconIndex: number; // to vary non-selected icons deterministically
+    baseRenderMode: 'native' | 'child'; // mimic prod: some use native image prop
+  };
 
   // Generate a dynamic list of random markers around Berlin (>= 1000)
-  const markers = useMemo(() => {
-    const count = 5000;
+  const [markers, setMarkers] = useState<MarkerItem[]>(() => {
+    const count = 500;
     const maxLatOffset = 0.12; // ~13km
-    const maxLngOffset = 0.20; // ~13km at Berlin latitude
-    const data = [] as { id: number; latitude: number; longitude: number }[];
+    const maxLngOffset = 0.2; // ~13km at Berlin latitude
+    const data: MarkerItem[] = [];
     for (let i = 0; i < count; i++) {
-      // Uniform-ish spread within a rectangle around Berlin
       const lat = BERLIN.latitude + (Math.random() * 2 - 1) * maxLatOffset;
       const lng = BERLIN.longitude + (Math.random() * 2 - 1) * maxLngOffset;
-      data.push({ id: i, latitude: lat, longitude: lng });
+      data.push({
+        id: i,
+        latitude: lat,
+        longitude: lng,
+        selected: false,
+        baseIconIndex: i % 3, // 0..2 for variety
+        baseRenderMode: i % 2 === 0 ? 'native' : 'child',
+      });
     }
     return data;
-  }, []);
+  });
 
-  // Selected marker and its polygon (a small circle approximation)
-  const selectedMarker = useMemo(
-    () => markers.find(m => m.id === selectedId) ?? null,
-    [markers, selectedId],
-  );
+  const selectedMarker = markers.find(m => m.selected) ?? null;
 
-  const selectedCircleCoords = useMemo(() => {
-    if (!selectedMarker) return null;
+  function circleCoordsFor(lat: number, lng: number) {
     const radiusMeters = 50; // small circle under the pin
     const points = 36;
-    const lat = selectedMarker.latitude;
-    const lng = selectedMarker.longitude;
     const mPerDegLat = 111320; // approx
     const mPerDegLng = 111320 * Math.cos((lat * Math.PI) / 180);
-    const coords = [] as { latitude: number; longitude: number }[];
+    const coords: { latitude: number; longitude: number }[] = [];
     for (let i = 0; i < points; i++) {
       const angle = (i / points) * 2 * Math.PI;
       const dLat = (Math.cos(angle) * radiusMeters) / mPerDegLat;
       const dLng = (Math.sin(angle) * radiusMeters) / mPerDegLng;
       coords.push({ latitude: lat + dLat, longitude: lng + dLng });
     }
-    // Close the polygon
-    coords.push(coords[0]);
+    coords.push(coords[0]); // close the polygon
     return coords;
-  }, [selectedMarker]);
+  }
+
+  const selectedCircleCoords = selectedMarker
+    ? circleCoordsFor(selectedMarker.latitude, selectedMarker.longitude)
+    : null;
+
+  // Stress toggling to reproduce: randomly select/deselect markers
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMarkers(prev => {
+        const next = [...prev];
+        const idx = Math.floor(Math.random() * next.length);
+        const current = next[idx];
+        // Toggle selection on a random marker; ensure only one selected at a time
+        for (let i = 0; i < next.length; i++) {
+          if (i === idx) next[i] = { ...current, selected: !current.selected };
+          else if (next[i].selected) next[i] = { ...next[i], selected: false };
+        }
+        return next;
+      });
+    }, 800);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -96,27 +120,51 @@ function AppContent() {
               zIndex={0}
             />
           )}
-          {markers.map(m => {
-            const isSelected = selectedId === m.id;
-            const size = isSelected ? 60 : 36;
+          {/* Render non-selected markers, mixing native image vs child image */}
+          {markers.filter(m => !m.selected).map(m => {
+            const baseIcon = m.baseIconIndex === 0 ? gasStation : car;
+            const useNative = m.baseRenderMode === 'native';
             return (
-              <Marker
+              <IconMarker
                 key={m.id}
-                stopPropagation
+                id={String(m.id)}
                 coordinate={{ latitude: m.latitude, longitude: m.longitude }}
-                // Re-render image when selected to reflect size change
-                tracksViewChanges={isSelected}
-                onPress={() => setSelectedId(m.id)}
-                zIndex={isSelected ? 1 : 0}
-              >
-                <Image
-                  style={{ width: size, height: size }}
-                  source={gasStation}
-                  resizeMode="contain"
-                />
-              </Marker>
+                zIndex={0}
+                useNativeImage={useNative}
+                nativeImage={useNative ? baseIcon : undefined}
+                childImage={!useNative ? baseIcon : undefined}
+                size={{ width: 36, height: 36 }}
+                onPress={() => {
+                  setMarkers(prev => prev.map(p =>
+                    p.id === m.id
+                      ? { ...p, selected: true }
+                      : { ...p, selected: false }
+                  ));
+                }}
+              />
             );
           })}
+
+          {/* Render selected marker separately with a different icon and child-image mode */}
+          {selectedMarker && (
+            <IconMarker
+              key={`selected-${selectedMarker.id}`}
+              id={`selected-${selectedMarker.id}`}
+              coordinate={{ latitude: selectedMarker.latitude, longitude: selectedMarker.longitude }}
+              zIndex={2}
+              useNativeImage={false}
+              childImage={car2}
+              size={{ width: 60, height: 60 }}
+              onPress={() => {
+                // Deselect on press to flip back
+                setMarkers(prev => prev.map(p =>
+                  p.id === selectedMarker.id
+                    ? { ...p, selected: false }
+                    : p
+                ));
+              }}
+            />
+          )}
         </MapView>
       </View>
     </View>
